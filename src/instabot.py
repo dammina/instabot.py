@@ -4,6 +4,7 @@
 from __future__ import print_function
 from .unfollow_protocol import unfollow_protocol
 from .userinfo import UserInfo
+from .calcel_pending_follow_requests import cancel_requested_follows
 import atexit
 import datetime
 import itertools
@@ -15,6 +16,7 @@ import sys
 import sqlite3
 import time
 import requests
+import emoji
 from .sql_updates import check_and_update, check_already_liked, check_already_followed
 from .sql_updates import insert_media, insert_username, insert_unfollow_count
 from .sql_updates import get_usernames_first, get_usernames, get_username_random
@@ -59,6 +61,8 @@ class InstaBot:
     url_media_detail = 'https://www.instagram.com/p/%s/?__a=1'
     url_user_detail = 'https://www.instagram.com/%s/'
     api_user_detail = 'https://i.instagram.com/api/v1/users/%s/info/'
+    url_requested_follows = 'https://www.instagram.com/accounts/access_tool/current_follow_requests?__a=1'
+    url_user_id = 'https://www.instagram.com/%s/?__a=1'
 
     user_agent = "" ""
     accept_language = 'en-US,en;q=0.5'
@@ -329,6 +333,8 @@ class InstaBot:
             logging.exception("Logout error!")
 
     def cleanup(self, *_):
+        #cancel pending follow requests
+        cancel_requested_follows()
         # Unfollow all bot follow
         if self.follow_counter >= self.unfollow_counter:
             for f in self.bot_follow_list:
@@ -528,8 +534,8 @@ class InstaBot:
                                 logging.exception("Except on like_all_exist_media")
                                 return False
 
-                            log_string = "Trying to like media: %s" % \
-                                         (self.media_by_tag[i]['node']['id'])
+                            log_string = "Trying to like media: https://www.instagram.com/p/%s" % \
+                                         (self.media_by_tag[i]['node']["shortcode"])
                             self.write_log(log_string)
                             like = self.like(self.media_by_tag[i]['node']['id'])
                             # comment = self.comment(self.media_by_tag[i]['id'], 'Cool!')
@@ -632,11 +638,16 @@ class InstaBot:
                 follow = self.s.post(url_follow)
                 if follow.status_code == 200:
                     self.follow_counter += 1
-                    log_string = "Followed: %s #%i." % (user_id,
+                    log_string = "Followed: %s (%s) #%i." % (user_id, self.get_username_by_user_id(user_id=user_id),
                                                         self.follow_counter)
                     self.write_log(log_string)
                     username = self.get_username_by_user_id(user_id=user_id)
                     insert_username(self, user_id=user_id, username=username)
+                elif follow.status_code == 400:
+                    sleep_time = random.randint(60 * 15, 60 * 60 * 2)
+                    log_string = "Follow operation blocked by instagram. Sleeping for: #%i." % sleep_time
+                    self.write_log(log_string)
+                    time.sleep(sleep_time)
                 return follow
             except:
                 logging.exception("Except on follow!")
@@ -765,15 +776,15 @@ class InstaBot:
                 self.next_iteration["Follow"] = time.time() + \
                                                 self.add_time(self.follow_delay/2)
                 return
-            log_string = "Trying to follow: %s" % (
-                self.media_by_tag[0]['node']["owner"]["id"])
+            log_string = "Trying to follow: %s" % (self.get_username_by_user_id(user_id=self.media_by_tag[0]['node']
+            ["owner"]["id"]))
             self.write_log(log_string)
 
             if self.follow(self.media_by_tag[0]['node']["owner"]["id"]) != False:
                 self.bot_follow_list.append(
                     [self.media_by_tag[0]['node']["owner"]["id"], time.time()])
                 self.next_iteration["Follow"] = time.time() + \
-                                                self.add_time(self.follow_delay)
+                                                self.add_time(self.follow_delay) + random.randint(30, 60)
 
     def new_auto_mod_unfollow(self):
         if time.time() > self.next_iteration["Unfollow"] and self.unfollow_per_day != 0:
@@ -808,7 +819,7 @@ class InstaBot:
         res = " ".join(random.choice(c_list))
         for s, r in repl:
             res = res.replace(s, r)
-        return res.capitalize()
+        return emoji.emojize(res.capitalize())
 
     def check_exisiting_comment(self, media_code):
         url_check = self.url_media_detail % (media_code)
